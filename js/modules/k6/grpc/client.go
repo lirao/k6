@@ -154,27 +154,41 @@ func (c *Client) Connect(addr string, params map[string]interface{}) (bool, erro
 	if err != nil {
 		return false, err
 	}
+	return true, nil
+}
 
-	if !p.UseReflectionProtocol {
-		return true, nil
+func (c *Client) Reflect(params goja.Value) error {
+	state := c.vu.State()
+	if state == nil {
+		return common.NewInitContextError("invoking reflect in the init context is not supported")
+	}
+	if c.conn == nil {
+		return errors.New("no gRPC connection, you must call connect first")
 	}
 
+	p, err := c.parseInvokeParams(params)
+	if err != nil {
+		return fmt.Errorf("invalid grpc.reflect() parameters: %w", err)
+	}
 	md := metadata.New(nil)
-	for param, strval := range p.ReflectMetadata {
+	for param, strval := range p.Metadata {
 		md.Append(param, strval)
 	}
+
+	ctx, cancel := context.WithTimeout(c.vu.Context(), p.Timeout)
+	defer cancel()
+
 	ctx = metadata.NewOutgoingContext(ctx, md)
 
 	fdset, err := c.conn.Reflect(ctx)
 	if err != nil {
-		return false, err
+		return err
 	}
 	_, err = c.convertToMethodInfo(fdset)
 	if err != nil {
-		return false, fmt.Errorf("can't convert method info: %w", err)
+		return fmt.Errorf("can't convert method info: %w", err)
 	}
-
-	return true, err
+	return nil
 }
 
 // Invoke creates and calls a unary RPC by fully qualified method name
@@ -380,7 +394,6 @@ type connectParams struct {
 	Timeout               time.Duration
 	MaxReceiveSize        int64
 	MaxSendSize           int64
-	ReflectMetadata       map[string]string
 }
 
 func (c *Client) parseConnectParams(raw map[string]interface{}) (connectParams, error) {
@@ -429,21 +442,6 @@ func (c *Client) parseConnectParams(raw map[string]interface{}) (connectParams, 
 			if params.MaxSendSize < 0 {
 				return params, fmt.Errorf("invalid maxSendSize value: '%#v, it needs to be a positive integer", v)
 			}
-		case "reflectMetadata":
-			params.ReflectMetadata = make(map[string]string)
-			rawHeaders, ok := v.(map[string]interface{})
-			if !ok {
-				return params, errors.New("metadata must be an object with key-value pairs")
-			}
-			for hk, kv := range rawHeaders {
-				// TODO(rogchap): Should we manage a string slice?
-				strval, ok := kv.(string)
-				if !ok {
-					return params, fmt.Errorf("metadata %q value must be a string", hk)
-				}
-				params.ReflectMetadata[hk] = strval
-			}
-
 		default:
 			return params, fmt.Errorf("unknown connect param: %q", k)
 		}
