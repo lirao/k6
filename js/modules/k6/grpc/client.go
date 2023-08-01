@@ -158,6 +158,13 @@ func (c *Client) Connect(addr string, params map[string]interface{}) (bool, erro
 	if !p.UseReflectionProtocol {
 		return true, nil
 	}
+
+	md := metadata.New(nil)
+	for param, strval := range p.ReflectMetadata {
+		md.Append(param, strval)
+	}
+	ctx = metadata.NewOutgoingContext(ctx, md)
+
 	fdset, err := c.conn.Reflect(ctx)
 	if err != nil {
 		return false, err
@@ -373,6 +380,7 @@ type connectParams struct {
 	Timeout               time.Duration
 	MaxReceiveSize        int64
 	MaxSendSize           int64
+	ReflectMetadata       map[string]string
 }
 
 func (c *Client) parseConnectParams(raw map[string]interface{}) (connectParams, error) {
@@ -420,6 +428,20 @@ func (c *Client) parseConnectParams(raw map[string]interface{}) (connectParams, 
 			}
 			if params.MaxSendSize < 0 {
 				return params, fmt.Errorf("invalid maxSendSize value: '%#v, it needs to be a positive integer", v)
+			}
+		case "reflectMetadata":
+			params.ReflectMetadata = make(map[string]string)
+			rawHeaders, ok := v.(map[string]interface{})
+			if !ok {
+				return params, errors.New("metadata must be an object with key-value pairs")
+			}
+			for hk, kv := range rawHeaders {
+				// TODO(rogchap): Should we manage a string slice?
+				strval, ok := kv.(string)
+				if !ok {
+					return params, fmt.Errorf("metadata %q value must be a string", hk)
+				}
+				params.ReflectMetadata[hk] = strval
 			}
 
 		default:
